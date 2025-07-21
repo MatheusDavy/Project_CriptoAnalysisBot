@@ -15,10 +15,24 @@ type CandlesTypes = {
   close: number;
 };
 
+type ShapesTypes = {
+  sr: number[],
+  flag: {
+    points: number[]
+    type: string
+  }[]
+  hs: {
+    neckline: number[]
+    points: number[]
+    type: string
+  }[]
+}
+
 type Response = {
   candles: CandlesTypes[];
   buy: number[]
   sell: number[]
+  shapes: ShapesTypes
 };
 
 const requestGetChartAnalysis = async (props: Props) : Promise<AxiosResponse<Response>> => {
