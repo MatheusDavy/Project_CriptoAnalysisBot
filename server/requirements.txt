@@ -1,0 +1,10 @@
+Flask
+ccxt
+pandas>=1.5
+numpy<1.24
+pandas_ta==0.3.14b0
+mplfinance
+python-dotenv
+sys
+candlestick
+watchfiles
