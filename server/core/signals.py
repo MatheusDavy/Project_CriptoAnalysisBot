@@ -1,152 +1,121 @@
 import logging
 import pandas as pd
-from core.candlestick import detect_candle_patterns
 
-def calculate_bollinger_bands(df, window=20, num_std=2):
-    """Calcula Bollinger Bands e adiciona ao df."""
-    if 'close' not in df.columns:
-        logging.warning("Coluna 'close' não encontrada para calcular Bollinger Bands.")
-        return df # Retorna o DataFrame original se 'close' não estiver presente
+from core.patterns.candles import detect_candle_signals
+from core.patterns.indicators import bollinger_bands, ema_crossover, rsi_signal, macd, stochastic
 
-    df['BB_Middle'] = df['close'].rolling(window=window, min_periods=1).mean() # min_periods para evitar NaN no início
-    df['BB_Std'] = df['close'].rolling(window=window, min_periods=1).std()
-    df['BB_Upper'] = df['BB_Middle'] + num_std * df['BB_Std']
-    df['BB_Lower'] = df['BB_Middle'] - num_std * df['BB_Std']
-    return df
+from core.patterns.shapes.sr_levels import detect_support_resistance_signals
+from core.patterns.shapes.hs import detect_hs_signals
+from core.patterns.shapes.flags import detect_flag_signals
+from core.patterns.shapes.fibonacci import generate_fibonacci_signals
 
-def generate_signals(df):
-    buy_signals_dates = [] # Renamed for clarity: storing dates/index
-    sell_signals_dates = [] # Renamed for clarity: storing dates/index
+from core.evaluate import evaluate_signals
 
-    if df.empty:
-        logging.warning("DataFrame vazio. Nenhum sinal gerado.")
-        return buy_signals_dates, sell_signals_dates
+def generate_signals(candles, analysis):
+    min_conf_buy = analysis['confluence']['buy']
+    min_conf_sell = analysis['confluence']['sell']
 
-    # Calcula Bollinger Bands (já dentro da função generate_signals)
-    # Garante que 'close' existe antes de calcular BB
-    if 'close' in df.columns:
-        df = calculate_bollinger_bands(df)
-    else:
-        logging.warning("Coluna 'close' não encontrada. Bollinger Bands não calculadas.")
+    df = pd.DataFrame(candles)
+    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
+    df.set_index('timestamp', inplace=True)
 
-    # Inicializa flags de sinais para todas as colunas esperadas
-    # Melhor forma de garantir que todas as colunas existem antes de atribuir False
-    signal_cols = ['ma_buy', 'ma_sell', 'rsi_buy', 'rsi_sell', 'macd_buy', 'macd_sell',
-                   'bb_buy', 'bb_sell', 'vol_buy', 'ml_buy', 'ml_sell', 'prophet_buy', 'prophet_sell',
-                   'pattern_buy', 'pattern_sell'] # Adicionado pattern_buy/sell
-    for col in signal_cols:
-        if col not in df.columns:
-            df[col] = False # Inicializa como False se não existir
+    # Análises ativadas
+    if analysis['candles']:
+        df = detect_candle_signals(df)
 
-    # --- Sinais Individuais ---
+    if analysis['shapes']['sr']:
+        df = detect_support_resistance_signals(df)
 
-    # 1. SMA / EMA Cross
-    if 'SMA_20' in df.columns and 'EMA_50' in df.columns:
-        df['ma_buy'] = (df['SMA_20'].shift(1) < df['EMA_50'].shift(1)) & (df['SMA_20'] > df['EMA_50'])
-        df['ma_sell'] = (df['SMA_20'].shift(1) > df['EMA_50'].shift(1)) & (df['SMA_20'] < df['EMA_50'])
+    if analysis['shapes']['flags']:
+        df = detect_flag_signals(df)
+    
+    if analysis['shapes']['fibonacci']:
+        df = generate_fibonacci_signals(df)
 
-    # 2. RSI 14
-    if 'RSI_14' in df.columns:
-        df['rsi_buy'] = df['RSI_14'] < 30
-        df['rsi_sell'] = df['RSI_14'] > 70
-        # Adição: Sinais de divergência ou RSI cruzando 50 podem ser mais poderosos
-        # Ex: df['rsi_buy_cross_30'] = (df['RSI_14'].shift(1) < 30) & (df['RSI_14'] >= 30)
+    if analysis['shapes']['hs']:
+        df = detect_hs_signals(df)
 
-    # 3. MACD Cross
-    if 'MACD_12_26_9' in df.columns and 'MACDs_12_26_9' in df.columns:
-        macd_prev_diff = df['MACD_12_26_9'].shift(1) - df['MACDs_12_26_9'].shift(1)
-        macd_now_diff = df['MACD_12_26_9'] - df['MACDs_12_26_9']
-        df['macd_buy'] = (macd_prev_diff < 0) & (macd_now_diff > 0) # MACD cruza acima da linha de sinal
-        df['macd_sell'] = (macd_prev_diff > 0) & (macd_now_diff < 0) # MACD cruza abaixo da linha de sinal
+    if analysis['indicators']['bb']:
+        df = bollinger_bands(df)
 
-    # 4. Bollinger Bands - preço fecha abaixo da banda inferior → compra; acima da superior → venda
-    if all(col in df.columns for col in ['close', 'BB_Upper', 'BB_Lower']):
-        # Adicionando um pequeno atraso (shift) para evitar "look-ahead bias"
-        # Isso garante que você só age no próximo candle após o sinal, como na vida real.
-        df['bb_buy'] = (df['close'].shift(1) < df['BB_Lower'].shift(1)) # Sinal de compra no candle anterior
-        df['bb_sell'] = (df['close'].shift(1) > df['BB_Upper'].shift(1)) # Sinal de venda no candle anterior
-        # Alternativa: o sinal é gerado QUANDO o preço fecha fora, e a entrada ocorreria NO PRÓXIMO candle.
-        # Sua lógica original: df['bb_buy'] = df['close'] < df['BB_Lower']
-        # Se você está backtesting com dados de fechamento, essa é a forma correta para o momento do sinal.
-        # Apenas considere como você está interpretando a entrada no backtest.
+    if analysis['indicators']['ema']:
+        df = ema_crossover(df)
 
-    # 5. Volume acima da média (últimos 20 candles)
-    if 'volume' in df.columns:
-        df['vol_ma'] = df['volume'].rolling(window=20, min_periods=1).mean()
-        df['vol_buy'] = df['volume'] > 1.5 * df['vol_ma']
-    else:
-        logging.warning("Coluna 'volume' não encontrada. Sinais de volume não calculados.")
-        df['vol_buy'] = False # Garante que a coluna existe
+    if analysis['indicators']['rsi']:
+        df = rsi_signal(df)
 
-    # 6. Sinais de ML (pré-calculados externamente e injetados no DataFrame)
-    if 'ml_buy' not in df.columns or 'ml_sell' not in df.columns:
-        logging.warning("Sinais de ML não encontrados. 'ml_buy' e 'ml_sell' foram definidos como False.")
-        df['ml_buy'] = False
-        df['ml_sell'] = False
-    else:
-        df['ml_buy'] = df['ml_buy'].astype(bool)
-        df['ml_sell'] = df['ml_sell'].astype(bool)
+    if analysis['indicators']['macd']:
+        df = macd(df)
 
-    # 7. Sinais de Prophet (pré-calculados externamente e injetados no DataFrame)
-    if 'prophet_buy' not in df.columns or 'prophet_sell' not in df.columns:
-        logging.warning("Sinais do Prophet não encontrados. 'prophet_buy' e 'prophet_sell' foram definidos como False.")
-        df['prophet_buy'] = False
-        df['prophet_sell'] = False
-    else:
-        df['prophet_buy'] = df['prophet_buy'].astype(bool)
-        df['prophet_sell'] = df['prophet_sell'].astype(bool)
+    if analysis['indicators']['stochastic']:
+        df = stochastic(df)
 
-    # 8. Padrões de Candlestick
-    # Garante que 'open', 'high', 'low', 'close' estão presentes
-    if all(col in df.columns for col in ['open', 'high', 'low', 'close']):
-        df = detect_candle_patterns(df) # Esta função deve adicionar 'pattern_buy' e 'pattern_sell'
-    else:
-        logging.warning("Colunas OHLC não encontradas. Padrões de candlestick não detectados.")
-        df['pattern_buy'] = False
-        df['pattern_sell'] = False
+    # Lista temporária de sinais brutos
+    buy_signals = []
+    sell_signals = []
 
-    # ======= CONFLUÊNCIA ATIVADA =======
-    # Definindo um mínimo de confluências para um sinal forte
-    # Você pode ajustar esses pesos ou o mínimo de confluências
-    min_confluences_buy = 2 # Exemplo: 2 ou mais condições de compra verdadeiras
-    min_confluences_sell = 2 # Exemplo: 2 ou mais condições de venda verdadeiras
+    for i in range(len(df) - 1):
+        row = df.iloc[i]
 
-    for i in range(len(df)): # Itera sobre o DataFrame
-        # Garante que os índices existam (pode haver NaN no início devido a rolling windows/shifts)
-        if i == 0 or any(pd.isna(df.iloc[i][col]) for col in ['BB_Upper', 'BB_Lower', 'SMA_20', 'EMA_50', 'RSI_14', 'MACD_12_26_9']):
-            continue # Pula as primeiras linhas onde os indicadores não estão totalmente calculados
+        conf_buy = 0
+        conf_sell = 0
 
-        # Soma das confluências de COMPRA
-        confluences_buy_count = 0
-        if df['ma_buy'].iloc[i]: confluences_buy_count += 1
-        if df['macd_buy'].iloc[i]: confluences_buy_count += 1
-        if df['bb_buy'].iloc[i]: confluences_buy_count += 1
-        if df['vol_buy'].iloc[i]: confluences_buy_count += 1
-        if df['ml_buy'].iloc[i]: confluences_buy_count += 1
-        if df['prophet_buy'].iloc[i]: confluences_buy_count += 1
-        if 'pattern_buy' in df.columns and df['pattern_buy'].iloc[i]: confluences_buy_count += 1
+        # Candles
+        if analysis['candles']:
+            conf_buy += int(row.get('candles_buy', False))
+            conf_sell += int(row.get('candles_sell', False))
 
+        # Shapes
+        if analysis['shapes']['sr']:
+            conf_buy += int(row.get('sr_buy', False))
+            conf_sell += int(row.get('sr_sell', False))
 
-        # Soma das confluências de VENDA
-        confluences_sell_count = 0
-        if df['ma_sell'].iloc[i]: confluences_sell_count += 1
-        if df['macd_sell'].iloc[i]: confluences_sell_count += 1
-        if df['bb_sell'].iloc[i]: confluences_sell_count += 1
-        if df['ml_sell'].iloc[i]: confluences_sell_count += 1
-        if df['prophet_sell'].iloc[i]: confluences_sell_count += 1
-        if 'pattern_sell' in df.columns and df['pattern_sell'].iloc[i]: confluences_sell_count += 1
+        if analysis['shapes']['flags']:
+            conf_buy += int(row.get('flags_buy', False))
+            conf_sell += int(row.get('flags_sell', False))
 
+        if analysis['shapes']['hs']:
+            conf_buy += int(row.get('hs_buy', False))
+            conf_sell += int(row.get('hs_sell', False))
 
-        # Geração dos sinais finais de compra/venda
-        if confluences_buy_count >= min_confluences_buy:
-            # Adiciona uma condição para evitar sinais de compra enquanto já há sinal de venda forte e vice-versa
-            if confluences_sell_count < min_confluences_sell: # Evita sinais conflitantes no mesmo candle
-                buy_signals_dates.append(df.index[i])
-                logging.debug(f"Sinal de COMPRA em {df.index[i]} com {confluences_buy_count} confluências.")
-        elif confluences_sell_count >= min_confluences_sell:
-            if confluences_buy_count < min_confluences_buy: # Evita sinais conflitantes no mesmo candle
-                sell_signals_dates.append(df.index[i])
-                logging.debug(f"Sinal de VENDA em {df.index[i]} com {confluences_sell_count} confluências.")
+        if analysis['shapes']['fibonacci']:
+            conf_buy += int(row.get('fibonacci_buy', False))
+            conf_sell += int(row.get('fibonacci_sell', False))
 
-    logging.info(f"Sinais gerados: {len(buy_signals_dates)} compra(s), {len(sell_signals_dates)} venda(s)")
-    return buy_signals_dates, sell_signals_dates
+        # Indicadores
+        if analysis['indicators']['bb']:
+            conf_buy += int(row.get('bb_buy', False))
+            conf_sell += int(row.get('bb_sell', False))
+
+        if analysis['indicators']['ema']:
+            conf_buy += int(row.get('ema_buy', False))
+            conf_sell += int(row.get('ema_sell', False))
+
+        if analysis['indicators']['rsi']:
+            conf_buy += int(row.get('rsi_buy', False))
+            conf_sell += int(row.get('rsi_sell', False))
+
+        if analysis['indicators']['macd']:
+            conf_buy += int(row.get('macd_buy', False))
+            conf_sell += int(row.get('macd_sell', False))
+
+        if analysis['indicators']['stochastic']:
+            conf_buy += int(row.get('stoch_buy', False))
+            conf_sell += int(row.get('stoch_sell', False))
+
+        next_ts = df.index[i + 1]
+
+        if conf_buy >= min_conf_buy and conf_sell < min_conf_sell:
+            buy_signals.append(int(next_ts.timestamp()))
+
+        elif conf_sell >= min_conf_sell and conf_buy < min_conf_buy:
+            sell_signals.append(int(next_ts.timestamp()))
+
+    # 🎯 Filtrando com modelo (apenas sinais > 70% de probabilidade de acerto)
+    logging.info(f"[SINAIS] Sinais aceitos: {len(buy_signals)} compras | {len(sell_signals)} vendas")
+
+    # Avaliação
+    buy_eval = evaluate_signals(df, buy_signals, direction='buy', future_candles=10)
+    sell_eval = evaluate_signals(df, sell_signals, direction='sell', future_candles=10)
+
+    return buy_signals, sell_signals, buy_eval, sell_eval

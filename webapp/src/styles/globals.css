@@ -1,0 +1,49 @@
+@import "./fonts.css";
+
+@import "tailwindcss";
+@plugin "tailwindcss-animate";
+@import "tw-animate-css";
+
+@import "./variables.css";
+@import "./theme.css";
+@import "./reset.css";
+
+.disable-transitions * {
+  transition: none !important;
+}
+
+@layer base {
+  * {
+    @apply border-border ring-ring;
+  }
+
+  body {
+    @apply bg-bg text-fg tracking-wide antialiased;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    @apply font-mono font-light uppercase;
+  }
+}
+
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: var(--accent-200);
+}
+
+*::selection {
+  background-color: hsl(from var(--accent) h s l / 0.3);
+}
+
+.lucide {
+  stroke-width: 1.5px;
+}

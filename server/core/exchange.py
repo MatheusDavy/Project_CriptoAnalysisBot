@@ -14,7 +14,7 @@ def fetch_ohlcv(symbol, interval, limit=100):
         data = response.json()
         return [
             {
-                "timestamp": int(k[0]),
+                "timestamp": int(k[0] // 1000),
                 "open": float(k[1]),
                 "high": float(k[2]),
                 "low": float(k[3]),

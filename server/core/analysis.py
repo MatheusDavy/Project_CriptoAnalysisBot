@@ -1,20 +1,9 @@
-import pandas as pd
-import pandas_ta as ta
-import logging
+from core.exchange import fetch_ohlcv
+from core.signals import generate_signals
+from core.shapes import generate_shapes
 
-def apply_technical_analysis(df):
-    if df.empty:
-        return df
+def generate_analysis (candles, analysis):
+  shapes = generate_shapes(candles, analysis['shapes'])
+  buy, sell, buy_eval, sell_eval = generate_signals(candles, analysis)
 
-    for col in ['open', 'high', 'low', 'close', 'volume']:
-        df[col] = pd.to_numeric(df[col], errors='coerce')
-    df.dropna(subset=['open', 'high', 'low', 'close', 'volume'], inplace=True)
-
-    df.ta.sma(length=20, append=True)
-    df.ta.ema(length=50, append=True)
-    df.ta.rsi(length=14, append=True)
-    df.ta.macd(append=True)
-    df.ta.bbands(append=True)
-
-    logging.info("Applied technical analysis indicators.")
-    return df
+  return shapes, buy, sell, buy_eval, sell_eval

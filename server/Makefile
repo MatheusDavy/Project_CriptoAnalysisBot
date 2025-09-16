@@ -1,7 +1,7 @@
 # Makefile para rodar o app Python
 
 # Nome do script principal
-APP_FILE=app.py
+APP_FILE=app/main.py
 
 # Ambiente Python (opcional)
 PYTHON=python
@@ -10,16 +10,9 @@ PYTHON=python
 
 start:
 	@echo "Iniciando aplicação com watch..."
-	nodemon --exec $(PYTHON) $(APP_FILE)
+	$(PYTHON) -m uvicorn app.main:app --reload --host 0.0.0.0 --port 333
 
 install:
 	@echo "Instalando dependências..."
 	pip install -r requirements.txt
 
-lint:
-	@echo "Verificando estilo do código com flake8..."
-	flake8 .
-
-clean:
-	@echo "Removendo arquivos __pycache__..."
-	find . -type d -name "__pycache__" -exec rm -r {} +
